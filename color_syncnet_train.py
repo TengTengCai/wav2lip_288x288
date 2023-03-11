@@ -1,3 +1,4 @@
+from multiprocessing import Manager
 from os.path import dirname, join, basename, isfile
 from tqdm import tqdm
 
@@ -35,8 +36,9 @@ syncnet_T = 5
 syncnet_mel_step_size = 16
 
 class Dataset(object):
-    def __init__(self, split):
+    def __init__(self, split, shared_dict):
         self.all_videos = get_image_list(args.data_root, split)
+        self.shared_dict = shared_dict
 
     def get_frame_id(self, frame):
         return int(basename(frame).split('.')[0])
@@ -109,9 +111,14 @@ class Dataset(object):
 
             try:
                 wavpath = join(vidname, "audio.wav")
-                wav = audio.load_wav(wavpath, hparams.sample_rate)
-
-                orig_mel = audio.melspectrogram(wav).T
+                # wav = audio.load_wav(wavpath, hparams.sample_rate)
+                # orig_mel = audio.melspectrogram(wav).T
+                if wavpath not in self.shared_dict:
+                    wav = audio.load_wav(wavpath, hparams.sample_rate)
+                    orig_mel = audio.melspectrogram(wav).T
+                    self.shared_dict[wavpath] = orig_mel
+                else:
+                    orig_mel = self.shared_dict[wavpath]
             except Exception as e:
                 continue
 
@@ -130,7 +137,7 @@ class Dataset(object):
 
             return x, mel, y
 
-logloss = nn.BCELoss()
+logloss = nn.BCEWithLogitsLoss()
 def cosine_loss(a, v, y):
     d = nn.functional.cosine_similarity(a, v)
     loss = logloss(d.unsqueeze(1), y)
@@ -144,6 +151,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
     resumed_step = global_step
     
     while global_epoch < nepochs:
+        print('Starting Epoch: {}'.format(global_epoch))
         running_loss = 0.
         prog_bar = tqdm(enumerate(train_data_loader))
         for step, (x, mel, y) in prog_bar:
@@ -250,8 +258,11 @@ if __name__ == "__main__":
     if not os.path.exists(checkpoint_dir): os.mkdir(checkpoint_dir)
 
     # Dataset and Dataloader setup
-    train_dataset = Dataset('train')
-    test_dataset = Dataset('val')
+    manager = Manager()
+    shared_dict = manager.dict()
+    train_dataset = Dataset('train', shared_dict)
+    # train_dataset = Dataset('train')
+    test_dataset = Dataset('val', shared_dict)
 
     train_data_loader = data_utils.DataLoader(
         train_dataset, batch_size=hparams.syncnet_batch_size, shuffle=True,
@@ -261,10 +272,11 @@ if __name__ == "__main__":
         test_dataset, batch_size=hparams.syncnet_batch_size,
         num_workers=8)
 
-    device = torch.device("cuda" if use_cuda else "cpu")
+    device = torch.device("cuda:0" if use_cuda else "cpu")
 
     # Model
     model = SyncNet().to(device)
+    model = nn.DataParallel(model)
     print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
