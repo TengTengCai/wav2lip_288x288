@@ -1,3 +1,4 @@
+from multiprocessing import Manager
 from os.path import dirname, join, basename, isfile
 from tqdm import tqdm
 import torch.autograd as autograd
@@ -288,7 +289,7 @@ def train(device, model, disc, train_data_loader, test_data_loader, optimizer, d
 
             running_disc_real_loss += disc_real_loss.item()
             running_disc_fake_loss += disc_fake_loss.item()
-             running_gp += gradient_penalty.item()
+            running_gp += gradient_penalty.item()
             if global_step % checkpoint_interval == 0:
                 save_sample_images(x, g, gt, global_step, checkpoint_dir)
 
